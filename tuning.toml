@@ -1,0 +1,12 @@
+[headtracking]
+yaw_gain = 2.0
+pitch_gain = 1.0
+roll_gain = 1.0
+x_gain = 1.0
+y_gain = 1.0
+z_gain = 1.0
+smoothing = 1.0
+prediction_ms = 0.0
+recenter_request = 0
+save_calibration_request = 0
+reset_calibration_request = 0

@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec "$HOME/mkw-headtracker/runtime/cpython-3.12.14-linux-x86_64-gnu/bin/python3.12" "$HOME/mkw-headtracker/ha_control.py" "$@"

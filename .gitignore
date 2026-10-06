@@ -1,0 +1,6 @@
+runtime/
+face_landmarker.task
+status.json
+*.log
+*.lock
+__pycache__/
