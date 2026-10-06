@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import json
 import time
+import base64
+import sys
 from pathlib import Path
 
 path = Path.home() / "mkw-headtracker" / "status.json"
@@ -13,5 +15,9 @@ if time.time() - float(data.get("updated_at", 0)) > 4.0:
     data["status"] = "offline"
     data["quality"] = 0
 
+if "--preview" in sys.argv:
+    try:
+        data["preview_jpeg"] = base64.b64encode(path.with_name("preview.jpg").read_bytes()).decode("ascii")
+    except OSError:
+        pass
 print(json.dumps(data, separators=(",", ":")))
-

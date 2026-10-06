@@ -40,6 +40,8 @@ CALIBRATION_SAMPLES = 20
 # never a limit or a dead zone.
 TUNING_FILE = Path.home() / "mkw-headtracker" / "tuning.toml"
 STATUS_FILE = Path.home() / "mkw-headtracker" / "status.json"
+PREVIEW_FILE = Path.home() / "mkw-headtracker" / "preview.jpg"
+last_preview_time = 0.0
 CALIBRATION_FILE = Path.home() / ".local/share/WiiCompiled/HeadTrackingCalibration.toml"
 YAW_GAIN = 2.0
 PITCH_GAIN = 1.0
@@ -262,10 +264,52 @@ def matrix_to_angles(M):
 
 
 def on_result(result, output_image, timestamp_ms):
+    global last_preview_time
     global latest_matrix
     global latest_result_time
     global tracking_count
     global callback_count
+
+    now = time.monotonic()
+    if now - last_preview_time >= 0.5:
+        last_preview_time = now
+        # Reuse capture frames; never open a second camera or block inference
+        # on network transfers. HA pulls the latest atomic JPEG independently.
+        with frame_lock:
+            preview = None if latest_frame is None else latest_frame.copy()
+        if preview is not None:
+            h, w = preview.shape[:2]
+            x1, x2 = int(w * CROP_X1), int(w * CROP_X2)
+            y1, y2 = int(h * CROP_Y1), int(h * CROP_Y2)
+            cv2.rectangle(preview, (x1,y1), (x2,y2), (255,180,0), 1)
+            label = "No face detected"
+            if result.face_landmarks and result.facial_transformation_matrixes:
+                landmarks = result.face_landmarks[0]
+                points = [(int(x1+p.x*(x2-x1)), int(y1+p.y*(y2-y1))) for p in landmarks]
+                xs, ys = zip(*points)
+                lo, hi = (min(xs), min(ys)), (max(xs), max(ys))
+                cv2.rectangle(preview, lo, hi, (80,240,80), 2)
+                for p in points[::8]:
+                    cv2.circle(preview, p, 1, (80,240,80), -1)
+                matrix = np.asarray(result.facial_transformation_matrixes[0])
+                angles = matrix_to_angles(matrix)[:3]
+                origin = points[1]
+                for axis, color in enumerate([(0,0,255),(0,255,0),(255,120,0)]):
+                    end = (int(origin[0]+35*matrix[0,axis]), int(origin[1]-35*matrix[1,axis]))
+                    cv2.arrowedLine(preview, origin, end, color, 2, tipLength=0.2)
+                label = f"Face {hi[0]-lo[0]}x{hi[1]-lo[1]}px | yaw {angles[0]:+.1f} pitch {angles[1]:+.1f} roll {angles[2]:+.1f}"
+            cv2.rectangle(preview,(0,0),(w,52),(20,20,20),-1)
+            cv2.putText(preview,label,(8,20),cv2.FONT_HERSHEY_SIMPLEX,0.43,(255,255,255),1)
+            cv2.putText(preview,"Blue box: tracking crop | axes: red X, green Y, blue Z",(8,42),cv2.FONT_HERSHEY_SIMPLEX,0.4,(220,220,220),1)
+            cv2.putText(preview,time.strftime("%H:%M:%S UTC",time.gmtime()),(8,h-10),cv2.FONT_HERSHEY_SIMPLEX,0.45,(255,255,255),1)
+            ok, jpeg = cv2.imencode(".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ok:
+                try:
+                    temporary = PREVIEW_FILE.with_suffix(".tmp.jpg")
+                    temporary.write_bytes(jpeg.tobytes())
+                    temporary.replace(PREVIEW_FILE)
+                except OSError:
+                    pass
 
     with pose_lock:
         callback_count += 1
