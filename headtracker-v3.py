@@ -11,7 +11,7 @@ import json
 import os
 import signal
 from pathlib import Path
-from adaptive_pose import AdaptivePoseFilter
+from adaptive_pose import FixedPoseFilter
 
 DEVICE = os.environ.get("MKW_CAMERA_DEVICE", "/dev/video1")
 MODEL = str(Path(__file__).with_name("face_landmarker.task"))
@@ -217,7 +217,7 @@ def pose_sender():
             # Zero smoothing means genuinely direct pose output.
             follow = 1.0
         else:
-            # The live amount controls AdaptivePoseFilter at measurement rate.
+            # The live amount controls FixedPoseFilter at measurement rate.
             # Keep reconstruction short so filtering does not stack extra lag.
             # Measurement filtering handles noise; this short stage reconstructs
             # a continuous output between the slower camera samples.
@@ -472,7 +472,7 @@ jitter_estimate = 0.0
 last_timestamp_ms = 0
 last_seq = 0
 last_pose_sample = -1
-pose_filter = AdaptivePoseFilter()
+pose_filter = FixedPoseFilter()
 live_tuning_mtime = -1
 live_tuning_check = 0.0
 output_thread = threading.Thread(target=pose_sender, daemon=True)
