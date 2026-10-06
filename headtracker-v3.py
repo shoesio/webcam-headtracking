@@ -11,6 +11,7 @@ import json
 import os
 import signal
 from pathlib import Path
+from adaptive_pose import AdaptivePoseFilter
 
 DEVICE = os.environ.get("MKW_CAMERA_DEVICE", "/dev/video1")
 MODEL = str(Path(__file__).with_name("face_landmarker.task"))
@@ -216,9 +217,11 @@ def pose_sender():
             # Zero smoothing means genuinely direct pose output.
             follow = 1.0
         else:
-            # Map the user-facing amount to a stable time constant. Higher
-            # values filter more; none of them should freeze the camera.
-            smoothing_tau = 0.008 + (0.112 * response)
+            # The live amount controls AdaptivePoseFilter at measurement rate.
+            # Keep reconstruction short so filtering does not stack extra lag.
+            # Measurement filtering handles noise; this short stage reconstructs
+            # a continuous output between the slower camera samples.
+            smoothing_tau = 0.020
             follow = 1.0 - math.exp(-dt / smoothing_tau)
         smooth += (predicted - smooth) * follow
 
@@ -468,6 +471,8 @@ last_report = time.monotonic()
 jitter_estimate = 0.0
 last_timestamp_ms = 0
 last_seq = 0
+last_pose_sample = -1
+pose_filter = AdaptivePoseFilter()
 live_tuning_mtime = -1
 live_tuning_check = 0.0
 output_thread = threading.Thread(target=pose_sender, daemon=True)
@@ -552,6 +557,8 @@ try:
             submitted_frames += 1
 
             with pose_lock:
+                pose_sample = tracking_count
+                pose_sample_time = latest_result_time
                 M = (
                     None
                     if latest_matrix is None
@@ -576,13 +583,15 @@ try:
             raw_y = None
             raw_z = None
 
-            if M is not None and pose_age < 0.35:
+            if M is not None and pose_age < 0.35 and pose_sample != last_pose_sample:
+                last_pose_sample = pose_sample
 
                 raw_yaw, raw_pitch, raw_roll, raw_x, raw_y, raw_z = (
                     matrix_to_angles(M)
                 )
 
                 if pending_reset:
+                    pose_filter.reset()
                     centre_yaw = centre_pitch = centre_roll = None
                     centre_x = centre_y = centre_z = None
                     centre_samples.clear()
@@ -594,6 +603,7 @@ try:
                     print("Head calibration reset; hold still for recentering.")
 
                 if pending_recenter:
+                    pose_filter.reset()
                     centre_yaw, centre_pitch, centre_roll = raw_yaw, raw_pitch, raw_roll
                     centre_x, centre_y, centre_z = raw_x, raw_y, raw_z
                     centre_samples.clear()
@@ -651,7 +661,8 @@ try:
                         continuous_axis(raw_y - centre_y, Y_GAIN),
                         continuous_axis(raw_z - centre_z, Z_GAIN),
                     ], dtype=np.float64)
-                    sample_time = time.monotonic()
+                    sample_time = pose_sample_time
+                    target = pose_filter.update(target, sample_time, SMOOTH)
                     with target_lock:
                         if latest_target_time > 0.0:
                             sample_dt = max(sample_time - latest_target_time, 1.0 / 120.0)
