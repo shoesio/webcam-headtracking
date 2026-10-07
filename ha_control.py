@@ -27,8 +27,8 @@ def main():
             numbers = list(map(float, sys.argv[2:]))
             if not all(math.isfinite(n) for n in numbers):
                 raise ValueError("Controls must be finite numbers")
-            if not 0 <= numbers[6] <= 1 or not 0 <= numbers[7] <= 100:
-                raise ValueError("Smoothing is 0–1; prediction is 0–100 ms")
+            if not 0 <= numbers[6] <= 5 or not 0 <= numbers[7] <= 100:
+                raise ValueError("Smoothing is 0–5; prediction is 0–100 ms")
             values.update(zip(list(DEFAULTS)[:8], numbers))
         elif sys.argv[1] == "request" and len(sys.argv) == 3:
             key = {"recenter": "recenter_request", "save": "save_calibration_request",

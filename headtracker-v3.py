@@ -12,6 +12,8 @@ import os
 import signal
 from pathlib import Path
 from adaptive_pose import FixedPoseFilter
+from pose_diagnostics import diagnostics
+from rotation_guard import RotationGuard
 
 DEVICE = os.environ.get("MKW_CAMERA_DEVICE", "/dev/video1")
 MODEL = str(Path(__file__).with_name("face_landmarker.task"))
@@ -53,6 +55,8 @@ DEADZONE = 0.0
 CURVE = 1.0
 SMOOTH = 0.65
 PREDICTION_MS = 30.0
+OUTLIER_REJECTION = False
+GUARD_SWITCH = Path.home() / "mkw-headtracker" / "outlier_rejection.enabled"
 
 FRAME_BYTES = CAPTURE_W * CAPTURE_H * 3
 
@@ -145,10 +149,16 @@ def load_live_tuning(last_mtime, last_check, now):
     global DEADZONE, CURVE, SMOOTH, PREDICTION_MS
     global pending_recenter, pending_save, pending_reset
     global last_recenter_request, last_save_request, last_reset_request
+    global OUTLIER_REJECTION
 
     if now - last_check < 0.20:
         return last_mtime, last_check
     last_check = now
+    enabled = GUARD_SWITCH.exists()
+    if enabled != OUTLIER_REJECTION:
+        rotation_guard.reset()
+        OUTLIER_REJECTION = enabled
+        print(f"Experimental rotation outlier rejection: {enabled}")
     try:
         mtime = TUNING_FILE.stat().st_mtime_ns
     except OSError:
@@ -165,7 +175,7 @@ def load_live_tuning(last_mtime, last_check, now):
     Z_GAIN = values.get("z_gain", Z_GAIN)
     DEADZONE = 0.0
     CURVE = 1.0
-    SMOOTH = clamp(values.get("smoothing", SMOOTH), 0.0, 1.0)
+    SMOOTH = clamp(values.get("smoothing", SMOOTH), 0.0, 5.0)
     PREDICTION_MS = clamp(values.get("prediction_ms", PREDICTION_MS), 0.0, 100.0)
 
     recenter = int(values.get("recenter_request", last_recenter_request))
@@ -214,7 +224,7 @@ def pose_sender():
         prediction = (PREDICTION_MS / 1000.0) * math.exp(-max(age, 0.0) / 0.060)
         predicted = target + velocity * prediction
 
-        response = clamp(SMOOTH, 0.0, 1.0)
+        response = clamp(SMOOTH, 0.0, 5.0)
         if response <= 0.001:
             # Zero smoothing means genuinely direct pose output.
             follow = 1.0
@@ -235,6 +245,7 @@ def pose_sender():
                 (" ".join(f"{value:.4f}" for value in smooth)).encode(),
                 (UDP_HOST, UDP_PORT)
             )
+            diagnostics.record("sent", pose=smooth.tolist(), sample_age_ms=age * 1000.0)
         except OSError:
             break
         time.sleep(1.0 / 120.0)
@@ -271,6 +282,16 @@ def on_result(result, output_image, timestamp_ms):
     global callback_count
 
     now = time.monotonic()
+    # Publish the result immediately: drawing/encoding the HA preview must
+    # not delay the game pose. The main loop consumes it independently of
+    # whether another camera frame is available for submission.
+    with pose_lock:
+        callback_count += 1
+        if result.facial_transformation_matrixes:
+            latest_matrix = np.array(result.facial_transformation_matrixes[0], copy=True)
+            latest_result_time = now
+            tracking_count += 1
+
     if now - last_preview_time >= 0.5:
         last_preview_time = now
         # Reuse capture frames; never open a second camera or block inference
@@ -310,20 +331,6 @@ def on_result(result, output_image, timestamp_ms):
                     temporary.replace(PREVIEW_FILE)
                 except OSError:
                     pass
-
-    with pose_lock:
-        callback_count += 1
-
-        if not result.facial_transformation_matrixes:
-            return
-
-        latest_matrix = np.array(
-            result.facial_transformation_matrixes[0],
-            copy=True
-        )
-        latest_result_time = time.monotonic()
-        tracking_count += 1
-
 
 options = FaceLandmarkerOptions(
     base_options=BaseOptions(model_asset_path=MODEL),
@@ -517,6 +524,7 @@ last_timestamp_ms = 0
 last_seq = 0
 last_pose_sample = -1
 pose_filter = FixedPoseFilter()
+rotation_guard = RotationGuard()
 live_tuning_mtime = -1
 live_tuning_check = 0.0
 output_thread = threading.Thread(target=pose_sender, daemon=True)
@@ -549,56 +557,22 @@ try:
 
             if frame is None:
                 time.sleep(0.001)
-                continue
-
-            last_seq = seq
-
-            h, w = frame.shape[:2]
-
-            x1 = int(w * CROP_X1)
-            x2 = int(w * CROP_X2)
-            y1 = int(h * CROP_Y1)
-            y2 = int(h * CROP_Y2)
-
-            crop = frame[y1:y2, x1:x2]
-
-            ch, cw = crop.shape[:2]
-
-            scale = INFERENCE_WIDTH / float(cw)
-            infer_h = max(1, int(ch * scale))
-
-            small = cv2.resize(
-                crop,
-                (INFERENCE_WIDTH, infer_h),
-                interpolation=cv2.INTER_AREA
-            )
-
-            # GStreamer supplied BGR.
-            rgb = cv2.cvtColor(
-                small,
-                cv2.COLOR_BGR2RGB
-            )
-
-            mp_image = mp.Image(
-                image_format=mp.ImageFormat.SRGB,
-                data=rgb
-            )
-
-            timestamp_ms = int(
-                time.monotonic() * 1000
-            )
-
-            if timestamp_ms <= last_timestamp_ms:
-                timestamp_ms = last_timestamp_ms + 1
-
-            last_timestamp_ms = timestamp_ms
-
-            landmarker.detect_async(
-                mp_image,
-                timestamp_ms
-            )
-
-            submitted_frames += 1
+            else:
+                last_seq = seq
+                h, w = frame.shape[:2]
+                x1, x2 = int(w * CROP_X1), int(w * CROP_X2)
+                y1, y2 = int(h * CROP_Y1), int(h * CROP_Y2)
+                crop = frame[y1:y2, x1:x2]
+                ch, cw = crop.shape[:2]
+                infer_h = max(1, int(ch * INFERENCE_WIDTH / float(cw)))
+                small = cv2.resize(crop, (INFERENCE_WIDTH, infer_h),
+                                   interpolation=cv2.INTER_AREA)
+                rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                timestamp_ms = max(int(time.monotonic() * 1000), last_timestamp_ms + 1)
+                last_timestamp_ms = timestamp_ms
+                landmarker.detect_async(mp_image, timestamp_ms)
+                submitted_frames += 1
 
             with pose_lock:
                 pose_sample = tracking_count
@@ -636,6 +610,7 @@ try:
 
                 if pending_reset:
                     pose_filter.reset()
+                    rotation_guard.reset()
                     centre_yaw = centre_pitch = centre_roll = None
                     centre_x = centre_y = centre_z = None
                     centre_samples.clear()
@@ -648,6 +623,7 @@ try:
 
                 if pending_recenter:
                     pose_filter.reset()
+                    rotation_guard.reset()
                     centre_yaw, centre_pitch, centre_roll = raw_yaw, raw_pitch, raw_roll
                     centre_x, centre_y, centre_z = raw_x, raw_y, raw_z
                     centre_samples.clear()
@@ -697,16 +673,31 @@ try:
 
                 else:
 
+                    measured_angles = [raw_yaw, raw_pitch, raw_roll]
+                    yaw, pitch, roll = (
+                        rotation_guard.update(measured_angles, pose_sample_time)
+                        if OUTLIER_REJECTION else measured_angles
+                    )
                     target = np.array([
-                        continuous_axis(-(raw_yaw - centre_yaw), YAW_GAIN),
-                        continuous_axis(raw_pitch - centre_pitch, PITCH_GAIN),
-                        continuous_axis(raw_roll - centre_roll, ROLL_GAIN),
+                        continuous_axis(-(yaw - centre_yaw), YAW_GAIN),
+                        continuous_axis(pitch - centre_pitch, PITCH_GAIN),
+                        continuous_axis(roll - centre_roll, ROLL_GAIN),
                         continuous_axis(raw_x - centre_x, X_GAIN),
                         continuous_axis(raw_y - centre_y, Y_GAIN),
                         continuous_axis(raw_z - centre_z, Z_GAIN),
                     ], dtype=np.float64)
                     sample_time = pose_sample_time
+                    mapped_pose = target.copy()
                     target = pose_filter.update(target, sample_time, SMOOTH)
+                    diagnostics.record(
+                        "measurement", sample_time=sample_time,
+                        raw=[raw_yaw, raw_pitch, raw_roll, raw_x, raw_y, raw_z],
+                        mapped=mapped_pose.tolist(), filtered=target.tolist(),
+                        smoothing=SMOOTH, prediction_ms=PREDICTION_MS,
+                        gains=[YAW_GAIN, PITCH_GAIN, ROLL_GAIN, X_GAIN, Y_GAIN, Z_GAIN],
+                        outlier_rejection=OUTLIER_REJECTION,
+                        rejected_rotation_axes=rotation_guard.rejected,
+                    )
                     with target_lock:
                         if latest_target_time > 0.0:
                             sample_dt = max(sample_time - latest_target_time, 1.0 / 120.0)
@@ -761,7 +752,7 @@ try:
                     - last_tracking_count
                 ) / elapsed
 
-                if raw_yaw is None or pose_age >= 0.35:
+                if M is None or pose_age >= 0.35:
                     lock_status = "lost"
                     lock_quality = 0
                 elif (centre_yaw is None or centre_pitch is None or centre_roll is None or
@@ -792,7 +783,7 @@ try:
                     "updated_at": time.time(),
                 })
 
-                if raw_yaw is None:
+                if M is None or pose_age >= 0.35:
                     pose_text = "NO FACE"
 
                 elif (centre_yaw is None or centre_pitch is None or centre_roll is None or
@@ -804,6 +795,9 @@ try:
                     )
 
                 else:
+                    # Reports can fall between fresh results now; use the
+                    # latest matrix for display without filtering it twice.
+                    raw_yaw, raw_pitch, raw_roll = matrix_to_angles(M)[:3]
                     pose_text = (
                         f"RAW yaw {raw_yaw:+6.1f} "
                         f"pitch {raw_pitch:+6.1f} "

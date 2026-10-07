@@ -43,7 +43,10 @@ class FixedPoseFilter:
             # The same response for small movements, fast turns and noise.
             # HA amounts 0.25 / 0.5 / 0.75 / 1 correspond to 50 / 140 /
             # 290 / 500 ms time constants. Zero bypasses filtering entirely.
-            tau = 0.020 + 0.480 * amount * amount
+            # Preserve the existing 0–1 response; above 1, multiply the
+            # previous maximum's 500 ms time constant (5x = 2.5 seconds).
+            tau = (0.020 + 0.480 * amount * amount
+                   if amount <= 1.0 else 0.500 * amount)
             alpha = 1.0 - math.exp(-dt / tau)
             self.filtered += (pose - self.filtered) * alpha
         return self.filtered.copy()
