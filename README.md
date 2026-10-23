@@ -1,9 +1,38 @@
 # Webcam head tracking
 
-The webcam head/gesture tracking companion used by **Mario Kart VR: Headtracked**
-on the BC-250 and Steam Deck. Source checkpoint recovered from the BC-250 on
-23 October 2026, preserving its six earlier Git checkpoints and the current
-uncommitted improvements. The live machines were not modified for this upload.
+**Early experimental prototype — very far from a finished product.** Expect
+rough edges, machine-specific assumptions and manual setup. This is not a
+polished download-and-play application, and the setup instructions are not a
+guarantee that a fresh installation will work without development effort.
+
+The goal is a **multifunctional webcam head-tracking system for suitable games**:
+use a normal camera and screen to get some of the look-around presence associated
+with VR, without requiring a headset. Driving and cockpit games, seated/in-car
+experiences, and on-rails games are the main intended use cases. Games where the
+player's position is already constrained are a better fit than experiences that
+depend on room-scale movement.
+
+It began as the webcam head/gesture tracking companion for **Mario Kart VR:
+Headtracked** on the BC-250 and Steam Deck. That is the current integration and
+testbed, not the intended limit of the project. The source checkpoint was
+recovered from the BC-250 on 23 October 2026, preserving its six earlier Git
+checkpoints and later working-tree improvements. The live machines were not
+modified for this upload.
+
+## What it is — and is not
+
+The longer-term direction is reusable head-pose tracking, configurable mapping,
+filtering and game-specific adapters, with optional gestures and external live
+controls. **That general-purpose integration layer is not finished or included
+as a universal game adapter.** The current code still has Mario Kart naming,
+paths, configuration and keyboard bindings that need adaptation for other games.
+
+This is an experiment in a head-tracked alternative to some VR-style camera
+interactions, not a complete replacement for VR hardware or a VR runtime. It
+does not provide stereoscopic rendering, headset display output, room-scale
+tracking or automatic VR support for arbitrary games. It is not a drop-in
+OpenXR, OpenTrack or TrackIR driver. A target game needs a compatible camera
+receiver or its own adapter to apply the tracked pose.
 
 This is the **tracker side**, not the game. It does not contain WiiCompiled,
 Mario Kart game assets, ROMs, NAND/Mii/save data, texture packs or the modified
@@ -127,5 +156,7 @@ behind authenticated HA access, not in its public `www` directory. The optional
 virtual wheel can affect Steam controller ordering; it is disabled by default
 in the head-only example. Do not enable it merely to use webcam head tracking.
 
-This is a private preservation repository. No new open-source license is being
-assigned by this export; upstream components retain their own licenses.
+This repository is public so the unfinished work and its direction can be
+explored openly. Public visibility does not itself grant an open-source license;
+no new license has been selected for this export. Upstream components retain
+their own licenses.
