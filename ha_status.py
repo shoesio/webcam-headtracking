@@ -20,4 +20,11 @@ if "--preview" in sys.argv:
         data["preview_jpeg"] = base64.b64encode(path.with_name("preview.jpg").read_bytes()).decode("ascii")
     except OSError:
         pass
+try:
+    arms = json.loads(path.with_name('arm_status.json').read_text())
+    if time.time()-float(arms.get('updated_at',0)) < 4:
+        data.update({key:value for key,value in arms.items()
+                     if key not in ('updated_at','arm_landmarks')})
+except (OSError,ValueError):
+    pass
 print(json.dumps(data, separators=(",", ":")))

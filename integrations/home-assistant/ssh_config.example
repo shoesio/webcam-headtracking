@@ -1,0 +1,13 @@
+Host mkw-bc250
+    HostName 192.0.2.10
+    User deck
+    IdentityFile /config/.ssh/id_ed25519
+    UserKnownHostsFile /config/.ssh/known_hosts
+    StrictHostKeyChecking yes
+
+Host mkw-steamdeck
+    HostName 192.0.2.11
+    User deck
+    IdentityFile /config/.ssh/id_ed25519
+    UserKnownHostsFile /config/.ssh/known_hosts
+    StrictHostKeyChecking yes

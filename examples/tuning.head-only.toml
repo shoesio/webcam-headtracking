@@ -1,0 +1,27 @@
+[headtracking]
+yaw_gain = 2.0
+pitch_gain = 2.0
+roll_gain = 1.0
+x_gain = 0.0
+y_gain = 0.0
+z_gain = 0.0
+smoothing = 0.5
+prediction_ms = 0.0
+recenter_request = 0
+save_calibration_request = 0
+reset_calibration_request = 0
+lean_enabled = 0
+lean_activation_deg = 12.0
+lean_release_deg = 6.0
+lean_confirmation_ms = 0.0
+throw_enabled = 0
+throw_stroke = 0.25
+throw_visibility = 0.4
+training_label = 0
+training_request = 0
+steering_enabled = 0
+steering_gain = 20.0
+steering_smoothing_ms = 80.0
+steering_invert = 0
+steering_curve = 1
+steering_center_request = 0

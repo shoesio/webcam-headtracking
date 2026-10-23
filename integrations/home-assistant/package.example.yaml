@@ -1,0 +1,121 @@
+# Example HA package: review paths/SSH aliases before importing.
+input_number:
+  mario_kart_head_yaw_gain:
+    name: Mario Kart head yaw
+    min: 0
+    max: 4
+    step: 0.05
+    mode: slider
+  mario_kart_head_pitch_gain:
+    name: Mario Kart head pitch
+    min: 0
+    max: 4
+    step: 0.05
+    mode: slider
+  mario_kart_head_roll_gain:
+    name: Mario Kart head roll
+    min: 0
+    max: 4
+    step: 0.05
+    mode: slider
+  mario_kart_head_x_gain:
+    name: Mario Kart head x
+    min: 0
+    max: 4
+    step: 0.05
+    mode: slider
+  mario_kart_head_y_gain:
+    name: Mario Kart head y
+    min: 0
+    max: 4
+    step: 0.05
+    mode: slider
+  mario_kart_head_z_gain:
+    name: Mario Kart head z
+    min: 0
+    max: 4
+    step: 0.05
+    mode: slider
+  mario_kart_head_smoothing:
+    name: Mario Kart head smoothing
+    min: 0
+    max: 5
+    step: 0.05
+    mode: slider
+  mario_kart_head_prediction:
+    name: Mario Kart head prediction
+    min: 0
+    max: 100
+    step: 5
+    mode: slider
+input_button:
+  mario_kart_head_recenter:
+    name: Recenter head
+  mario_kart_head_save_calibration:
+    name: Save head calibration
+  mario_kart_head_reset_calibration:
+    name: Reset head calibration
+input_select:
+  mario_kart_machine:
+    name: Tracking machine
+    options:
+      - BC-250
+      - Steam Deck
+shell_command:
+  mkw_headtracking_apply: >-
+    ssh -F /config/mkw_ssh_config -o BatchMode=yes -o ConnectTimeout=3 {{ 'mkw-steamdeck' if is_state('input_select.mario_kart_machine', 'Steam Deck') else 'mkw-bc250' }} /home/deck/mkw-headtracker/ha-control apply
+    "{{ states('input_number.mario_kart_head_yaw_gain') | float(0) }}"
+    "{{ states('input_number.mario_kart_head_pitch_gain') | float(0) }}"
+    "{{ states('input_number.mario_kart_head_roll_gain') | float(0) }}"
+    "{{ states('input_number.mario_kart_head_x_gain') | float(0) }}"
+    "{{ states('input_number.mario_kart_head_y_gain') | float(0) }}"
+    "{{ states('input_number.mario_kart_head_z_gain') | float(0) }}"
+    "{{ states('input_number.mario_kart_head_smoothing') | float(0) }}"
+    "{{ states('input_number.mario_kart_head_prediction') | float(0) }}"
+  mkw_headtracking_recenter: >-
+    ssh -F /config/mkw_ssh_config -o BatchMode=yes -o ConnectTimeout=3 {{ 'mkw-steamdeck' if is_state('input_select.mario_kart_machine', 'Steam Deck') else 'mkw-bc250' }} /home/deck/mkw-headtracker/ha-control request recenter
+  mkw_headtracking_save: >-
+    ssh -F /config/mkw_ssh_config -o BatchMode=yes -o ConnectTimeout=3 {{ 'mkw-steamdeck' if is_state('input_select.mario_kart_machine', 'Steam Deck') else 'mkw-bc250' }} /home/deck/mkw-headtracker/ha-control request save
+  mkw_headtracking_reset: >-
+    ssh -F /config/mkw_ssh_config -o BatchMode=yes -o ConnectTimeout=3 {{ 'mkw-steamdeck' if is_state('input_select.mario_kart_machine', 'Steam Deck') else 'mkw-bc250' }} /home/deck/mkw-headtracker/ha-control request reset
+automation:
+  - id: mkw_example_apply
+    alias: Mario Kart apply live head controls
+    trigger:
+      - platform: state
+        entity_id:
+          - input_number.mario_kart_head_yaw_gain
+          - input_number.mario_kart_head_pitch_gain
+          - input_number.mario_kart_head_roll_gain
+          - input_number.mario_kart_head_x_gain
+          - input_number.mario_kart_head_y_gain
+          - input_number.mario_kart_head_z_gain
+          - input_number.mario_kart_head_smoothing
+          - input_number.mario_kart_head_prediction
+    action:
+      - service: shell_command.mkw_headtracking_apply
+    mode: restart
+  - id: mkw_example_recenter
+    alias: Mario Kart recenter head reference
+    trigger:
+      - platform: state
+        entity_id: input_button.mario_kart_head_recenter
+    action:
+      - service: shell_command.mkw_headtracking_recenter
+    mode: single
+  - id: mkw_example_save
+    alias: Mario Kart save head reference
+    trigger:
+      - platform: state
+        entity_id: input_button.mario_kart_head_save_calibration
+    action:
+      - service: shell_command.mkw_headtracking_save
+    mode: single
+  - id: mkw_example_reset
+    alias: Mario Kart reset head reference
+    trigger:
+      - platform: state
+        entity_id: input_button.mario_kart_head_reset_calibration
+    action:
+      - service: shell_command.mkw_headtracking_reset
+    mode: single

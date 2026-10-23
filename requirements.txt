@@ -1,0 +1,4 @@
+# Runtime dependencies; not a deployment lockfile. See README for source-host versions.
+numpy
+mediapipe
+opencv-contrib-python

@@ -14,6 +14,8 @@ from pathlib import Path
 from adaptive_pose import FixedPoseFilter
 from pose_diagnostics import diagnostics
 from rotation_guard import RotationGuard
+from lean_gesture import LeanGesture, DriftKeyboard
+from arm_throw import FrameBus
 
 DEVICE = os.environ.get("MKW_CAMERA_DEVICE", "/dev/video1")
 MODEL = str(Path(__file__).with_name("face_landmarker.task"))
@@ -57,8 +59,19 @@ SMOOTH = 0.65
 PREDICTION_MS = 30.0
 OUTLIER_REJECTION = False
 GUARD_SWITCH = Path.home() / "mkw-headtracker" / "outlier_rejection.enabled"
+LEAN_ENABLED = False
+LEAN_ACTIVATION = 12.0
+LEAN_RELEASE = 6.0
+LEAN_CONFIRMATION_MS = 120.0
+latest_lean_roll = 0.0
+latest_lean_time = 0.0
+lean_gesture = LeanGesture()
+drift_keyboard = DriftKeyboard()
+lean_error = ""
 
 FRAME_BYTES = CAPTURE_W * CAPTURE_H * 3
+arm_bus = FrameBus(writer=True)
+arm_process = None
 
 BaseOptions = mp.tasks.BaseOptions
 Vision = mp.tasks.vision
@@ -150,6 +163,7 @@ def load_live_tuning(last_mtime, last_check, now):
     global pending_recenter, pending_save, pending_reset
     global last_recenter_request, last_save_request, last_reset_request
     global OUTLIER_REJECTION
+    global LEAN_ENABLED, LEAN_ACTIVATION, LEAN_RELEASE, LEAN_CONFIRMATION_MS
 
     if now - last_check < 0.20:
         return last_mtime, last_check
@@ -177,6 +191,10 @@ def load_live_tuning(last_mtime, last_check, now):
     CURVE = 1.0
     SMOOTH = clamp(values.get("smoothing", SMOOTH), 0.0, 5.0)
     PREDICTION_MS = clamp(values.get("prediction_ms", PREDICTION_MS), 0.0, 100.0)
+    LEAN_ENABLED = bool(values.get("lean_enabled", 0))
+    LEAN_ACTIVATION = clamp(values.get("lean_activation_deg", 12.0), 3.0, 40.0)
+    LEAN_RELEASE = clamp(values.get("lean_release_deg", 6.0), 0.0, LEAN_ACTIVATION - 0.5)
+    LEAN_CONFIRMATION_MS = clamp(values.get("lean_confirmation_ms", 120.0), 0.0, 500.0)
 
     recenter = int(values.get("recenter_request", last_recenter_request))
     save = int(values.get("save_calibration_request", last_save_request))
@@ -208,6 +226,7 @@ def pose_sender():
     """Send a continuously filtered, short-horizon predicted six-axis pose."""
     global smooth_yaw, smooth_pitch, smooth_roll
     global smooth_x, smooth_y, smooth_z
+    global lean_error
 
     previous = time.monotonic()
     smooth = np.zeros(6, dtype=np.float64)
@@ -220,6 +239,22 @@ def pose_sender():
             target = latest_target_pose.copy()
             velocity = latest_target_velocity.copy()
             age = 0.0 if latest_target_time == 0.0 else now - latest_target_time
+            lean_roll, lean_time = latest_lean_roll, latest_lean_time
+
+        try:
+            if LEAN_ENABLED:
+                drift_keyboard.open()
+            held = lean_gesture.update(lean_roll, lean_time, now, LEAN_ENABLED,
+                                       LEAN_ACTIVATION, LEAN_RELEASE, LEAN_CONFIRMATION_MS)
+            drift_keyboard.set(held)
+            lean_error = ""
+        except OSError as exc:
+            lean_error = str(exc)
+            lean_gesture.held = False
+            try:
+                drift_keyboard.close()
+            except OSError:
+                pass
 
         prediction = (PREDICTION_MS / 1000.0) * math.exp(-max(age, 0.0) / 0.060)
         predicted = target + velocity * prediction
@@ -300,6 +335,21 @@ def on_result(result, output_image, timestamp_ms):
             preview = None if latest_frame is None else latest_frame.copy()
         if preview is not None:
             h, w = preview.shape[:2]
+            try:
+                arms = json.loads(Path(__file__).with_name('arm_status.json').read_text())
+                points = arms.get('arm_landmarks', [])
+                if time.time()-arms.get('updated_at',0) < 2 and len(points) >= 17:
+                    for a,b in [(11,12),(11,13),(13,15),(12,14),(14,16)]:
+                        if min(points[a][3],points[b][3]) >= .25:
+                            pa=(int(points[a][0]*w),int(points[a][1]*h))
+                            pb=(int(points[b][0]*w),int(points[b][1]*h))
+                            cv2.line(preview,pa,pb,(240,100,255),2)
+                            cv2.circle(preview,pb,4,(240,100,255),-1)
+                cv2.putText(preview,
+                    f"Throws: F {arms.get('forward_throws',0)} / B {arms.get('backward_throws',0)} | {arms.get('last_throw','')}",
+                    (8,h-32),cv2.FONT_HERSHEY_SIMPLEX,.45,(240,100,255),1)
+            except (OSError,ValueError,TypeError):
+                pass
             x1, x2 = int(w * CROP_X1), int(w * CROP_X2)
             y1, y2 = int(h * CROP_Y1), int(h * CROP_Y2)
             cv2.rectangle(preview, (x1,y1), (x2,y2), (255,180,0), 1)
@@ -436,6 +486,7 @@ def capture_worker():
             CAPTURE_W,
             3
         ).copy()
+        arm_bus.publish(data)
 
         with frame_lock:
             latest_frame = frame
@@ -529,6 +580,8 @@ live_tuning_mtime = -1
 live_tuning_check = 0.0
 output_thread = threading.Thread(target=pose_sender, daemon=True)
 output_thread.start()
+if Path(__file__).with_name('pose_landmarker_lite.task').exists():
+    arm_process = subprocess.Popen([sys.executable, str(Path(__file__).with_name('arm_throw.py'))])
 
 
 try:
@@ -611,6 +664,7 @@ try:
                 if pending_reset:
                     pose_filter.reset()
                     rotation_guard.reset()
+                    latest_lean_time = 0.0
                     centre_yaw = centre_pitch = centre_roll = None
                     centre_x = centre_y = centre_z = None
                     centre_samples.clear()
@@ -624,6 +678,7 @@ try:
                 if pending_recenter:
                     pose_filter.reset()
                     rotation_guard.reset()
+                    latest_lean_time = 0.0
                     centre_yaw, centre_pitch, centre_roll = raw_yaw, raw_pitch, raw_roll
                     centre_x, centre_y, centre_z = raw_x, raw_y, raw_z
                     centre_samples.clear()
@@ -699,6 +754,8 @@ try:
                         rejected_rotation_axes=rotation_guard.rejected,
                     )
                     with target_lock:
+                        latest_lean_roll = float(roll - centre_roll)
+                        latest_lean_time = sample_time
                         if latest_target_time > 0.0:
                             sample_dt = max(sample_time - latest_target_time, 1.0 / 120.0)
                             measured_velocity = (target - latest_target_pose) / sample_dt
@@ -781,6 +838,10 @@ try:
                     "jitter_deg_s": round(jitter_estimate, 1),
                     "output_velocity_deg_s": round(float(np.linalg.norm(latest_target_velocity[:3])), 1),
                     "updated_at": time.time(),
+                    "lean_enabled": LEAN_ENABLED,
+                    "lean_roll_deg": round(latest_lean_roll, 1),
+                    "lean_drift_held": lean_gesture.held,
+                    "lean_error": lean_error,
                 })
 
                 if M is None or pose_age >= 0.35:
@@ -829,10 +890,18 @@ except KeyboardInterrupt:
 
 finally:
     output_stop.set()
+    if arm_process is not None:
+        arm_process.terminate()
+        try:
+            arm_process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            arm_process.kill()
+            arm_process.wait()
     try:
         output_thread.join(timeout=1.0)
     except Exception:
         pass
+    drift_keyboard.close()
 
     try:
         sock.sendto(

@@ -34,6 +34,37 @@ def main():
             key = {"recenter": "recenter_request", "save": "save_calibration_request",
                    "reset": "reset_calibration_request"}[sys.argv[2]]
             values[key] = max(time.time_ns() // 1_000_000, int(values[key]) + 1)
+        elif sys.argv[1] == "training" and len(sys.argv) == 3:
+            label = {'stop':0,'overarm':1,'underarm':2,'normal':3}[sys.argv[2]]
+            values.update(training_label=label,
+                          training_request=time.time_ns() // 1_000_000)
+        elif sys.argv[1] == "steering" and len(sys.argv) == 6:
+            enabled, strength, smoothing, invert = map(float, sys.argv[2:])
+            if (not all(math.isfinite(v) for v in (enabled,strength,smoothing,invert))
+                    or enabled not in (0,1) or invert not in (0,1)
+                    or not .5 <= strength <= 50 or not 0 <= smoothing <= 500):
+                raise ValueError('Steering: enabled/invert 0/1, strength 0.5–50, smoothing 0–500 ms')
+            values.update(steering_enabled=int(enabled), steering_gain=strength,
+                          steering_smoothing_ms=smoothing, steering_invert=int(invert))
+        elif sys.argv[1] == "steering-curve" and len(sys.argv) == 3:
+            values['steering_curve'] = {'Linear':0,'Gentle':1,'Strong':2}[sys.argv[2]]
+        elif sys.argv[1] == "steering-center" and len(sys.argv) == 2:
+            values['steering_center_request'] = time.time_ns() // 1_000_000
+        elif sys.argv[1] == "throws" and len(sys.argv) == 5:
+            enabled, stroke, visibility = map(float, sys.argv[2:])
+            if (not all(math.isfinite(v) for v in (enabled,stroke,visibility))
+                    or enabled not in (0,1) or not .1 <= stroke <= 1
+                    or not .1 <= visibility <= .9):
+                raise ValueError('Throws: enabled 0/1, stroke .1–1, visibility .1–.9')
+            values.update(throw_enabled=int(enabled),throw_stroke=stroke,throw_visibility=visibility)
+        elif sys.argv[1] == "lean" and len(sys.argv) == 6:
+            enabled, activation, release, confirmation = map(float, sys.argv[2:])
+            if (not all(math.isfinite(v) for v in (enabled, activation, release, confirmation))
+                    or enabled not in (0, 1) or not 3 <= activation <= 40
+                    or not 0 <= release < activation or not 0 <= confirmation <= 500):
+                raise ValueError("Lean: enabled 0/1, activation 3–40°, release below activation, confirmation 0–500 ms")
+            values.update(lean_enabled=int(enabled), lean_activation_deg=activation,
+                          lean_release_deg=release, lean_confirmation_ms=confirmation)
         elif sys.argv[1] != "init":
             raise ValueError("Use apply with eight values, request recenter/save/reset, or init")
         temporary = CONFIG.with_suffix(".tmp")
